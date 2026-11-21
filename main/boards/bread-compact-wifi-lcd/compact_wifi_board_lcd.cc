@@ -119,8 +119,8 @@ public:
         blink_timer_ = lv_timer_create(BlinkTimerCb, 3200, this);
     }
 
-    virtual void SetEmotion(const char* emotion) override {
-        if (!emotion) return;
+    virtual bool SetEmotion(const char* emotion) override {
+        if (!emotion) return false;
         DisplayLockGuard lock(this);
         if (strcmp(emotion, "happy") == 0 || strcmp(emotion, "laughing") == 0 || strcmp(emotion, "loving") == 0) {
             ApplyEyeShape(52, 26, 82); // Весёлый прищур
@@ -133,6 +133,7 @@ public:
         } else {
             ApplyEyeShape(96, 28, 62); // Обычные крупные открытые глаза
         }
+        return true;
     }
 
     virtual void SetStatus(const char* status) override {
