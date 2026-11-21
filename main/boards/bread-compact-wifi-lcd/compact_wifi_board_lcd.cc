@@ -151,7 +151,7 @@ private:
             .glitch_ignore_cnt = 7,
             .flags = {.enable_internal_pullup = true},
         };
-        if (i2c_master_new_bus(&bus_cfg, &i2c_bus_) == ESP_OK) {
+        if (i2c_new_master_bus(&bus_cfg, &i2c_bus_) == ESP_OK) {
             bmp280_.Init(i2c_bus_);
         }
     }
@@ -259,9 +259,13 @@ private:
                 Property("blue", kPropertyTypeInteger, 0, 255)
             }),
             [this](const PropertyList& properties) -> ReturnValue {
-                uint8_t r = properties.at("red").value<int>();
-                uint8_t g = properties.at("green").value<int>();
-                uint8_t b = properties.at("blue").value<int>();
+                                uint8_t r = 0, g = 0, b = 0;
+                for (const auto& p : properties) {
+                    if (p.name() == "red") r = p.value<int>();
+                    else if (p.name() == "green") g = p.value<int>();
+                    else if (p.name() == "blue") b = p.value<int>();
+                }
+
                 if (led_strip_) led_strip_->SetAllColor({r, g, b});
                 return true;
             });
