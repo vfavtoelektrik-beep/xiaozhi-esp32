@@ -259,8 +259,10 @@ private:
                 Property("blue", kPropertyTypeInteger, 0, 255)
             }),
             [this](const PropertyList& properties) -> ReturnValue {
-                                uint8_t r = 0, g = 0, b = 0;
-                for (const auto& p : properties) {
+                uint8_t r = 0, g = 0, b = 0;
+                auto props = properties;
+                for (const auto& p : props) {
+
                     if (p.name() == "red") r = p.value<int>();
                     else if (p.name() == "green") g = p.value<int>();
                     else if (p.name() == "blue") b = p.value<int>();
