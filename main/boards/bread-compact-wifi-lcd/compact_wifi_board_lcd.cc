@@ -8,7 +8,6 @@
 #include "mcp_server.h"
 #include "led/circular_strip.h"
 
-#include <wifi_station.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
@@ -21,6 +20,8 @@
 #include <esp_adc/adc_cali_scheme.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <vector>
+#include <cstdio>
 
 #define TAG "KosmonavtLcdBoard"
 
@@ -28,20 +29,21 @@ class SimpleBmp280 {
 private:
     i2c_master_dev_handle_t dev_handle_ = nullptr;
     bool initialized_ = false;
-    uint16_t dig_T1_, dig_P1_;
-    int16_t dig_T2_, dig_T3_, dig_P2_, dig_P3_, dig_P4_, dig_P5_, dig_P6_, dig_P7_, dig_P8_, dig_P9_;
+    uint16_t dig_T1_ = 0, dig_P1_ = 0;
+    int16_t dig_T2_ = 0, dig_T3_ = 0, dig_P2_ = 0, dig_P3_ = 0, dig_P4_ = 0;
+    int16_t dig_P5_ = 0, dig_P6_ = 0, dig_P7_ = 0, dig_P8_ = 0, dig_P9_ = 0;
 
     bool ReadReg(uint8_t reg, uint8_t* data, size_t len) {
         return i2c_master_transmit_receive(dev_handle_, &reg, 1, data, len, 100) == ESP_OK;
     }
     bool WriteReg(uint8_t reg, uint8_t val) {
-        uint8_t buf = {reg, val};
-        return i2c_master_transmit(dev_handle_, buf, 2, 100) == ESP_OK;
+        std::vector<uint8_t> buf = {reg, val};
+        return i2c_master_transmit(dev_handle_, buf.data(), buf.size(), 100) == ESP_OK;
     }
 
 public:
     bool Init(i2c_master_bus_handle_t bus) {
-        uint8_t addrs[] = {0x76, 0x77};
+        std::vector<uint8_t> addrs = {0x76, 0x77};
         for (uint8_t addr : addrs) {
             i2c_device_config_t dev_cfg = {
                 .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -51,12 +53,20 @@ public:
             if (i2c_master_bus_add_device(bus, &dev_cfg, &dev_handle_) == ESP_OK) {
                 uint8_t id = 0;
                 if (ReadReg(0xD0, &id, 1) && (id == 0x58 || id == 0x60)) {
-                    uint8_t c;
-                    if (ReadReg(0x88, c, 24)) {
-                        dig_T1_ = (c << 8) | c; dig_T2_ = (c << 8) | c; dig_T3_ = (c << 8) | c;
-                        dig_P1_ = (c << 8) | c; dig_P2_ = (c << 8) | c; dig_P3_ = (c << 8) | c;
-                        dig_P4_ = (c << 8) | c; dig_P5_ = (c << 8) | c; dig_P6_ = (c << 8) | c;
-                        dig_P7_ = (c << 8) | c; dig_P8_ = (c << 8) | c; dig_P9_ = (c << 8) | c;
+                    std::vector<uint8_t> c(24, 0);
+                    if (ReadReg(0x88, c.data(), 24)) {
+                        dig_T1_ = (c.at(1) << 8) | c.at(0);
+                        dig_T2_ = (c.at(3) << 8) | c.at(2);
+                        dig_T3_ = (c.at(5) << 8) | c.at(4);
+                        dig_P1_ = (c.at(7) << 8) | c.at(6);
+                        dig_P2_ = (c.at(9) << 8) | c.at(8);
+                        dig_P3_ = (c.at(11) << 8) | c.at(10);
+                        dig_P4_ = (c.at(13) << 8) | c.at(12);
+                        dig_P5_ = (c.at(15) << 8) | c.at(14);
+                        dig_P6_ = (c.at(17) << 8) | c.at(16);
+                        dig_P7_ = (c.at(19) << 8) | c.at(18);
+                        dig_P8_ = (c.at(21) << 8) | c.at(20);
+                        dig_P9_ = (c.at(23) << 8) | c.at(22);
                         WriteReg(0xF4, 0x27);
                         WriteReg(0xF5, 0xA0);
                         initialized_ = true;
@@ -72,11 +82,11 @@ public:
 
     bool Read(float& temp_c, float& press_mmhg) {
         if (!initialized_) return false;
-        uint8_t d;
-        if (!ReadReg(0xF7, d, 6)) return false;
+        std::vector<uint8_t> d(6, 0);
+        if (!ReadReg(0xF7, d.data(), 6)) return false;
 
-        int32_t adc_P = ((uint32_t)d << 12) | ((uint32_t)d << 4) | (d >> 4);
-        int32_t adc_T = ((uint32_t)d << 12) | ((uint32_t)d << 4) | (d >> 4);
+        int32_t adc_P = ((uint32_t)d.at(0) << 12) | ((uint32_t)d.at(1) << 4) | (d.at(2) >> 4);
+        int32_t adc_T = ((uint32_t)d.at(3) << 12) | ((uint32_t)d.at(4) << 4) | (d.at(5) >> 4);
 
         int32_t var1 = ((((adc_T >> 3) - ((int32_t)dig_T1_ << 1))) * ((int32_t)dig_T2_)) >> 11;
         int32_t var2 = (((((adc_T >> 4) - ((int32_t)dig_T1_)) * ((adc_T >> 4) - ((int32_t)dig_T1_))) >> 12) * ((int32_t)dig_T3_)) >> 14;
@@ -95,7 +105,6 @@ public:
         return true;
     }
 };
-
 class CompactWifiBoardLcd : public WifiBoard {
 private:
     Button boot_button_;
@@ -217,11 +226,10 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
-            }
-            app.ToggleChatState();
+            Application::GetInstance().ToggleChatState();
+        });
+        boot_button_.OnDoubleClick([this]() {
+            EnterWifiConfigMode();
         });
         boot_button_.OnLongPress([this]() {
             EnterDeepSleep();
@@ -236,9 +244,9 @@ private:
             [this](const PropertyList& properties) -> ReturnValue {
                 float temp = 0.0f, press = 0.0f;
                 if (bmp280_.Read(temp, press)) {
-                    char buf;
-                    snprintf(buf, sizeof(buf), "{\"temperature_c\": %.1f, \"pressure_mmhg\": %.1f}", temp, press);
-                    return std::string(buf);
+                    std::string res = "{\"temperature_c\": " + std::to_string(temp) +
+                                      ", \"pressure_mmhg\": " + std::to_string(press) + "}";
+                    return res;
                 }
                 return std::string("{\"error\": \"Датчик BMP280 не отвечает\"}");
             });
@@ -246,14 +254,14 @@ private:
         mcp.AddTool("self.helmet_light.set_color",
             "Установить цвет RGB (0-255) неоновой подсветки шлема космонавта",
             PropertyList({
-                                Property("red", kPropertyTypeInteger, 0, 255),
+                Property("red", kPropertyTypeInteger, 0, 255),
                 Property("green", kPropertyTypeInteger, 0, 255),
                 Property("blue", kPropertyTypeInteger, 0, 255)
             }),
             [this](const PropertyList& properties) -> ReturnValue {
-                uint8_t r = properties["red"].value<int>();
-                uint8_t g = properties["green"].value<int>();
-                uint8_t b = properties["blue"].value<int>();
+                uint8_t r = properties.at("red").value<int>();
+                uint8_t g = properties.at("green").value<int>();
+                uint8_t b = properties.at("blue").value<int>();
                 if (led_strip_) led_strip_->SetAllColor({r, g, b});
                 return true;
             });
