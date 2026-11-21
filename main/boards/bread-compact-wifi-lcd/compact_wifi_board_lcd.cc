@@ -10,6 +10,7 @@
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
+#include <driver/rtc_io.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -24,21 +25,54 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include <cstdlib>
 
 #define TAG "KosmonavtLcdBoard"
 
-// Кастомный дисплей с крупными анимированными белыми глазами на глухом чёрном фоне
+// Кастомный дисплей с крупными живыми глазами (белки, зрачки, блики) и полным засыпанием
 class KosmonavtEyeDisplay : public SpiLcdDisplay {
 private:
     lv_obj_t* eye_layer_ = nullptr;
     lv_obj_t* left_eye_ = nullptr;
     lv_obj_t* right_eye_ = nullptr;
+    lv_obj_t* left_pupil_ = nullptr;
+    lv_obj_t* right_pupil_ = nullptr;
+    lv_obj_t* left_glint_ = nullptr;
+    lv_obj_t* right_glint_ = nullptr;
     lv_obj_t* status_bar_ = nullptr;
     lv_timer_t* blink_timer_ = nullptr;
-    int target_h_ = 96;
-    int target_r_ = 28;
-    int target_y_ = 62;
+    lv_timer_t* look_timer_ = nullptr;
+
+    int target_h_ = 104;
+    int target_r_ = 32;
+    int target_y_ = 58;
+    int pupil_dx_ = 0;
+    int pupil_dy_ = 0;
     bool is_blinking_ = false;
+    bool is_sleeping_ = false;
+
+    void UpdatePupilPositions() {
+        if (!left_pupil_ || !right_pupil_) return;
+        // Центрируем зрачок (28x36) внутри глаза (74 x target_h_) со смещением (pupil_dx_, pupil_dy_)
+        int pw = 28;
+        int ph = (target_h_ < 44) ? (target_h_ - 8) : 36;
+        if (ph < 8) ph = 8;
+
+        lv_obj_set_size(left_pupil_, pw, ph);
+        lv_obj_set_size(right_pupil_, pw, ph);
+
+        int px = (74 - pw) / 2 + pupil_dx_;
+        int py = (target_h_ - ph) / 2 + pupil_dy_;
+
+        // Ограничиваем, чтобы зрачок не вылезал за края белка
+        if (px < 6) px = 6;
+        if (px > 74 - pw - 6) px = 74 - pw - 6;
+        if (py < 4) py = 4;
+        if (py > target_h_ - ph - 4) py = target_h_ - ph - 4;
+
+        lv_obj_set_pos(left_pupil_, px, py);
+        lv_obj_set_pos(right_pupil_, px, py);
+    }
 
     void EnsureEyeLayer() {
         if (eye_layer_) return;
@@ -54,63 +88,126 @@ private:
         lv_obj_set_style_pad_all(eye_layer_, 0, 0);
         lv_obj_clear_flag(eye_layer_, LV_OBJ_FLAG_SCROLLABLE);
 
+        // Левый глаз (белок)
         left_eye_ = lv_obj_create(eye_layer_);
-        lv_obj_set_size(left_eye_, 68, 96);
-        lv_obj_set_pos(left_eye_, 36, 62);
+        lv_obj_set_size(left_eye_, 74, 104);
+        lv_obj_set_pos(left_eye_, 32, 58);
         lv_obj_set_style_bg_color(left_eye_, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(left_eye_, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(left_eye_, 0, 0);
-        lv_obj_set_style_radius(left_eye_, 28, 0);
+        lv_obj_set_style_pad_all(left_eye_, 0, 0);
+        lv_obj_set_style_radius(left_eye_, 32, 0);
         lv_obj_clear_flag(left_eye_, LV_OBJ_FLAG_SCROLLABLE);
 
+        // Правый глаз (белок)
         right_eye_ = lv_obj_create(eye_layer_);
-        lv_obj_set_size(right_eye_, 68, 96);
-        lv_obj_set_pos(right_eye_, 136, 62);
+        lv_obj_set_size(right_eye_, 74, 104);
+        lv_obj_set_pos(right_eye_, 134, 58);
         lv_obj_set_style_bg_color(right_eye_, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(right_eye_, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(right_eye_, 0, 0);
-        lv_obj_set_style_radius(right_eye_, 28, 0);
+        lv_obj_set_style_pad_all(right_eye_, 0, 0);
+        lv_obj_set_style_radius(right_eye_, 32, 0);
         lv_obj_clear_flag(right_eye_, LV_OBJ_FLAG_SCROLLABLE);
 
+        // Левый зрачок
+        left_pupil_ = lv_obj_create(left_eye_);
+        lv_obj_set_size(left_pupil_, 28, 36);
+        lv_obj_set_style_bg_color(left_pupil_, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(left_pupil_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(left_pupil_, 0, 0);
+        lv_obj_set_style_pad_all(left_pupil_, 0, 0);
+        lv_obj_set_style_radius(left_pupil_, 14, 0);
+        lv_obj_clear_flag(left_pupil_, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Правый зрачок
+        right_pupil_ = lv_obj_create(right_eye_);
+        lv_obj_set_size(right_pupil_, 28, 36);
+        lv_obj_set_style_bg_color(right_pupil_, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(right_pupil_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(right_pupil_, 0, 0);
+        lv_obj_set_style_pad_all(right_pupil_, 0, 0);
+        lv_obj_set_style_radius(right_pupil_, 14, 0);
+        lv_obj_clear_flag(right_pupil_, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Белые блики в зрачках (оживляют взгляд)
+        left_glint_ = lv_obj_create(left_pupil_);
+        lv_obj_set_size(left_glint_, 8, 8);
+        lv_obj_set_pos(left_glint_, 5, 6);
+        lv_obj_set_style_bg_color(left_glint_, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(left_glint_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(left_glint_, 0, 0);
+        lv_obj_set_style_radius(left_glint_, 4, 0);
+
+        right_glint_ = lv_obj_create(right_pupil_);
+        lv_obj_set_size(right_glint_, 8, 8);
+        lv_obj_set_pos(right_glint_, 5, 6);
+        lv_obj_set_style_bg_color(right_glint_, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(right_glint_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(right_glint_, 0, 0);
+        lv_obj_set_style_radius(right_glint_, 4, 0);
+
+        UpdatePupilPositions();
+
+        // Полоска статуса снизу
         status_bar_ = lv_obj_create(eye_layer_);
-        lv_obj_set_size(status_bar_, 80, 8);
-        lv_obj_set_pos(status_bar_, 80, 192);
+        lv_obj_set_size(status_bar_, 72, 6);
+        lv_obj_set_pos(status_bar_, 84, 196);
         lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 180, 255), 0);
         lv_obj_set_style_bg_opa(status_bar_, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(status_bar_, 0, 0);
-        lv_obj_set_style_radius(status_bar_, 4, 0);
+        lv_obj_set_style_radius(status_bar_, 3, 0);
 
-        blink_timer_ = lv_timer_create(BlinkTimerCb, 3200, this);
+        blink_timer_ = lv_timer_create(BlinkTimerCb, 3400, this);
+        look_timer_ = lv_timer_create(LookTimerCb, 1900, this);
     }
 
     static void BlinkTimerCb(lv_timer_t* timer) {
         auto* self = static_cast<KosmonavtEyeDisplay*>(lv_timer_get_user_data(timer));
-        if (!self || !self->left_eye_ || !self->right_eye_) return;
+        if (!self || self->is_sleeping_ || !self->left_eye_ || !self->right_eye_) return;
         lv_obj_move_foreground(self->eye_layer_);
         if (!self->is_blinking_) {
             self->is_blinking_ = true;
+            lv_obj_add_flag(self->left_pupil_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(self->right_pupil_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_height(self->left_eye_, 8);
             lv_obj_set_height(self->right_eye_, 8);
             lv_obj_set_y(self->left_eye_, self->target_y_ + self->target_h_ / 2);
             lv_obj_set_y(self->right_eye_, self->target_y_ + self->target_h_ / 2);
-            lv_timer_set_period(timer, 140);
+            lv_timer_set_period(timer, 130);
         } else {
             self->is_blinking_ = false;
+            lv_obj_clear_flag(self->left_pupil_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(self->right_pupil_, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_height(self->left_eye_, self->target_h_);
             lv_obj_set_height(self->right_eye_, self->target_h_);
             lv_obj_set_y(self->left_eye_, self->target_y_);
             lv_obj_set_y(self->right_eye_, self->target_y_);
-            lv_timer_set_period(timer, 3200);
+            self->UpdatePupilPositions();
+            lv_timer_set_period(timer, 3400);
         }
     }
 
-    void ApplyEyeShape(int h, int r, int y_offset) {
+    static void LookTimerCb(lv_timer_t* timer) {
+        auto* self = static_cast<KosmonavtEyeDisplay*>(lv_timer_get_user_data(timer));
+        if (!self || self->is_sleeping_ || self->is_blinking_) return;
+        // Лёгкое живое движение зрачков по сторонам
+        static const int offsets[][2] = {{0, 0}, {-10, -4}, {10, -4}, {0, 0}, {-8, 6}, {8, 6}, {0, -8}};
+        int idx = rand() % 7;
+        self->pupil_dx_ = offsets[idx][0];
+        self->pupil_dy_ = offsets[idx][1];
+        self->UpdatePupilPositions();
+    }
+
+    void ApplyEyeShape(int h, int r, int y_offset, int dx = 0, int dy = 0) {
         EnsureEyeLayer();
         if (!left_eye_ || !right_eye_) return;
         lv_obj_move_foreground(eye_layer_);
         target_h_ = h;
         target_r_ = r;
         target_y_ = y_offset;
+        pupil_dx_ = dx;
+        pupil_dy_ = dy;
         if (!is_blinking_) {
             lv_obj_set_height(left_eye_, target_h_);
             lv_obj_set_height(right_eye_, target_h_);
@@ -118,6 +215,22 @@ private:
             lv_obj_set_style_radius(right_eye_, target_r_, 0);
             lv_obj_set_y(left_eye_, target_y_);
             lv_obj_set_y(right_eye_, target_y_);
+            UpdatePupilPositions();
+        }
+    }
+
+    void SetScreenSleep(bool sleep) {
+        EnsureEyeLayer();
+        if (!eye_layer_) return;
+        is_sleeping_ = sleep;
+        auto* bl = Board::GetInstance().GetBacklight();
+        if (sleep) {
+            lv_obj_add_flag(eye_layer_, LV_OBJ_FLAG_HIDDEN);
+            if (bl) bl->SetBrightness(0);
+        } else {
+            lv_obj_clear_flag(eye_layer_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(eye_layer_);
+            if (bl) bl->RestoreBrightness();
         }
     }
 
@@ -133,16 +246,21 @@ public:
     virtual bool SetEmotion(const char* emotion) override {
         if (!emotion) return false;
         DisplayLockGuard lock(this);
+                if (strcmp(emotion, "sleep") == 0 || strcmp(emotion, "sleepy") == 0) {
+            SetScreenSleep(true);
+            return true;
+        }
+        SetScreenSleep(false);
         if (strcmp(emotion, "happy") == 0 || strcmp(emotion, "laughing") == 0 || strcmp(emotion, "loving") == 0) {
-            ApplyEyeShape(52, 26, 82);
+            ApplyEyeShape(58, 28, 80, 0, -4);
         } else if (strcmp(emotion, "surprised") == 0 || strcmp(emotion, "shocked") == 0) {
-            ApplyEyeShape(114, 34, 52);
-        } else if (strcmp(emotion, "sad") == 0 || strcmp(emotion, "crying") == 0 || strcmp(emotion, "sleepy") == 0) {
-            ApplyEyeShape(36, 16, 102);
+            ApplyEyeShape(118, 36, 50, 0, 0);
+        } else if (strcmp(emotion, "sad") == 0 || strcmp(emotion, "crying") == 0) {
+            ApplyEyeShape(46, 20, 96, 0, 10);
         } else if (strcmp(emotion, "thinking") == 0 || strcmp(emotion, "confused") == 0) {
-            ApplyEyeShape(64, 20, 74);
+            ApplyEyeShape(72, 24, 72, 12, -14);
         } else {
-            ApplyEyeShape(96, 28, 62);
+            ApplyEyeShape(104, 32, 58, 0, 0);
         }
         return true;
     }
@@ -152,15 +270,24 @@ public:
         DisplayLockGuard lock(this);
         EnsureEyeLayer();
         if (!status_bar_) return;
+
         if (strstr(status, "Listening") || strstr(status, "Слушаю")) {
+            SetScreenSleep(false);
             lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 255, 100), 0);
-            ApplyEyeShape(106, 30, 56);
+            ApplyEyeShape(112, 34, 54, 0, 0);
         } else if (strstr(status, "Speaking") || strstr(status, "Говорю")) {
+            SetScreenSleep(false);
             lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 180, 255), 0);
-            ApplyEyeShape(88, 28, 66);
+            ApplyEyeShape(96, 30, 62, 0, 0);
+        } else if (strstr(status, "Connecting") || strstr(status, "Подключение") ||
+                   strstr(status, "Starting") || strstr(status, "Запуск") ||
+                   strstr(status, "Upgrading") || strstr(status, "Обновление")) {
+            SetScreenSleep(false);
+            lv_obj_set_style_bg_color(status_bar_, lv_color_make(255, 180, 0), 0);
+            ApplyEyeShape(84, 28, 68, 0, -10);
         } else {
-            lv_obj_set_style_bg_color(status_bar_, lv_color_make(90, 90, 90), 0);
-            ApplyEyeShape(96, 28, 62);
+            // Режим ожидания / тишина (Idle / Standby) — полностью гасим глаза и подсветку!
+            SetScreenSleep(true);
         }
     }
 
@@ -277,16 +404,30 @@ private:
     }
 
     void EnterDeepSleep() {
+        ESP_LOGI(TAG, "Подготовка к глубокому сну...");
         if (display_) GetBacklight()->SetBrightness(0);
         if (led_strip_) {
             led_strip_->SetAllColor({0, 0, 0});
             vTaskDelay(pdMS_TO_TICKS(20));
         }
+
+        // Ждём, пока отпустите кнопку, иначе плата сразу проснётся (ребутнется)!
+        while (gpio_get_level(BOOT_BUTTON_GPIO) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        vTaskDelay(pdMS_TO_TICKS(120)); // защита от дребезга контактов
+
         gpio_reset_pin(NEOPIXEL_STRIP_PIN);
         gpio_set_level(PERIPH_POWER_PIN, 0);
         gpio_hold_en(PERIPH_POWER_PIN);
+
+        // Включаем RTC-подтяжку вверх для кнопки без внешнего резистора
+        rtc_gpio_init(BOOT_BUTTON_GPIO);
+        rtc_gpio_set_direction(BOOT_BUTTON_GPIO, RTC_GPIO_MODE_INPUT_ONLY);
+        rtc_gpio_pullup_en(BOOT_BUTTON_GPIO);
+        rtc_gpio_pulldown_dis(BOOT_BUTTON_GPIO);
+
         esp_sleep_enable_ext0_wakeup(BOOT_BUTTON_GPIO, 0);
-        vTaskDelay(pdMS_TO_TICKS(100));
         esp_deep_sleep_start();
     }
 
@@ -328,6 +469,7 @@ private:
         }
         return ((sum_mv / 16.0f) * 2.0f) / 1000.0f;
     }
+
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_SPI_MOSI_PIN;
@@ -455,6 +597,9 @@ private:
 
 public:
     CompactWifiBoardLcd() : boot_button_(BOOT_BUTTON_GPIO) {
+        rtc_gpio_deinit(BOOT_BUTTON_GPIO);
+        gpio_set_pull_mode(BOOT_BUTTON_GPIO, GPIO_PULLUP_ONLY);
+
         gpio_hold_dis(PERIPH_POWER_PIN);
         InitPeriphPower();
         InitBatteryAdc();
@@ -496,3 +641,4 @@ public:
 };
 
 DECLARE_BOARD(CompactWifiBoardLcd);
+
