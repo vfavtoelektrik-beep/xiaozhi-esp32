@@ -20,10 +20,140 @@
 #include <esp_adc/adc_cali_scheme.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <lvgl.h>
 #include <vector>
-#include <cstdio>
+#include <string>
+#include <cstring>
 
 #define TAG "KosmonavtLcdBoard"
+
+// Кастомный дисплей с крупными анимированными белыми глазами на глухом чёрном фоне
+class KosmonavtEyeDisplay : public SpiLcdDisplay {
+private:
+    lv_obj_t* eye_screen_ = nullptr;
+    lv_obj_t* left_eye_ = nullptr;
+    lv_obj_t* right_eye_ = nullptr;
+    lv_obj_t* status_bar_ = nullptr;
+    lv_timer_t* blink_timer_ = nullptr;
+    int target_h_ = 96;
+    int target_r_ = 28;
+    int target_y_ = 62;
+    bool is_blinking_ = false;
+
+    static void BlinkTimerCb(lv_timer_t* timer) {
+        auto* self = static_cast<KosmonavtEyeDisplay*>(lv_timer_get_user_data(timer));
+        if (!self || !self->left_eye_ || !self->right_eye_) return;
+        if (!self->is_blinking_) {
+            self->is_blinking_ = true;
+            lv_obj_set_height(self->left_eye_, 8);
+            lv_obj_set_height(self->right_eye_, 8);
+            lv_obj_set_y(self->left_eye_, self->target_y_ + self->target_h_ / 2);
+            lv_obj_set_y(self->right_eye_, self->target_y_ + self->target_h_ / 2);
+            lv_timer_set_period(timer, 140);
+        } else {
+            self->is_blinking_ = false;
+            lv_obj_set_height(self->left_eye_, self->target_h_);
+            lv_obj_set_height(self->right_eye_, self->target_h_);
+            lv_obj_set_y(self->left_eye_, self->target_y_);
+            lv_obj_set_y(self->right_eye_, self->target_y_);
+            lv_timer_set_period(timer, 3200);
+        }
+    }
+
+    void ApplyEyeShape(int h, int r, int y_offset) {
+        if (!left_eye_ || !right_eye_) return;
+        target_h_ = h;
+        target_r_ = r;
+        target_y_ = y_offset;
+        if (!is_blinking_) {
+            lv_obj_set_height(left_eye_, target_h_);
+            lv_obj_set_height(right_eye_, target_h_);
+            lv_obj_set_style_radius(left_eye_, target_r_, 0);
+            lv_obj_set_style_radius(right_eye_, target_r_, 0);
+            lv_obj_set_y(left_eye_, target_y_);
+            lv_obj_set_y(right_eye_, target_y_);
+        }
+    }
+
+public:
+    KosmonavtEyeDisplay(esp_lcd_panel_io_handle_t io, esp_lcd_panel_handle_t panel,
+                        int width, int height, int offset_x, int offset_y,
+                        bool mirror_x, bool mirror_y, bool swap_xy)
+        : SpiLcdDisplay(io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy) {
+        DisplayLockGuard lock(this);
+        eye_screen_ = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(eye_screen_, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(eye_screen_, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(eye_screen_, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Левый крупный белый глаз
+        left_eye_ = lv_obj_create(eye_screen_);
+        lv_obj_set_size(left_eye_, 68, 96);
+        lv_obj_set_pos(left_eye_, 36, 62);
+        lv_obj_set_style_bg_color(left_eye_, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(left_eye_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(left_eye_, 0, 0);
+        lv_obj_set_style_radius(left_eye_, 28, 0);
+        lv_obj_clear_flag(left_eye_, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Правый крупный белый глаз
+        right_eye_ = lv_obj_create(eye_screen_);
+        lv_obj_set_size(right_eye_, 68, 96);
+        lv_obj_set_pos(right_eye_, 136, 62);
+        lv_obj_set_style_bg_color(right_eye_, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(right_eye_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(right_eye_, 0, 0);
+        lv_obj_set_style_radius(right_eye_, 28, 0);
+        lv_obj_clear_flag(right_eye_, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Тонкая полоска состояния внизу визора (белая/голубая/зелёная)
+        status_bar_ = lv_obj_create(eye_screen_);
+        lv_obj_set_size(status_bar_, 80, 8);
+        lv_obj_set_pos(status_bar_, 80, 192);
+        lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 180, 255), 0);
+        lv_obj_set_style_bg_opa(status_bar_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(status_bar_, 0, 0);
+        lv_obj_set_style_radius(status_bar_, 4, 0);
+
+        lv_scr_load(eye_screen_);
+        blink_timer_ = lv_timer_create(BlinkTimerCb, 3200, this);
+    }
+
+    virtual void SetEmotion(const char* emotion) override {
+        if (!emotion) return;
+        DisplayLockGuard lock(this);
+        if (strcmp(emotion, "happy") == 0 || strcmp(emotion, "laughing") == 0 || strcmp(emotion, "loving") == 0) {
+            ApplyEyeShape(52, 26, 82); // Весёлый прищур
+        } else if (strcmp(emotion, "surprised") == 0 || strcmp(emotion, "shocked") == 0) {
+            ApplyEyeShape(114, 34, 52); // Широко раскрытые глаза
+        } else if (strcmp(emotion, "sad") == 0 || strcmp(emotion, "crying") == 0 || strcmp(emotion, "sleepy") == 0) {
+            ApplyEyeShape(36, 16, 102); // Грустные / сонные прикрытые глаза
+        } else if (strcmp(emotion, "thinking") == 0 || strcmp(emotion, "confused") == 0) {
+            ApplyEyeShape(64, 20, 74); // Задумчивый прищур
+        } else {
+            ApplyEyeShape(96, 28, 62); // Обычные крупные открытые глаза
+        }
+    }
+
+    virtual void SetStatus(const char* status) override {
+        if (!status || !status_bar_) return;
+        DisplayLockGuard lock(this);
+        if (strstr(status, "Listening") || strstr(status, "Слушаю")) {
+            lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 255, 100), 0);
+            ApplyEyeShape(106, 30, 56);
+        } else if (strstr(status, "Speaking") || strstr(status, "Говорю")) {
+            lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 180, 255), 0);
+            ApplyEyeShape(88, 28, 66);
+        } else {
+            lv_obj_set_style_bg_color(status_bar_, lv_color_make(90, 90, 90), 0);
+            ApplyEyeShape(96, 28, 62);
+        }
+    }
+
+    virtual void SetChatMessage(const char* role, const char* content) override {
+        // Игнорируем мелкий текст субтитров, чтобы визор оставался чистым
+    }
+};
 
 class SimpleBmp280 {
 private:
@@ -99,21 +229,24 @@ public:
         p_var1 = (((((int64_t)1) << 47) + p_var1)) * ((int64_t)dig_P1_) >> 33;
         if (p_var1 == 0) return false;
 
-        int64_t p = (((1048576 - adc_P) << 31) - p_var2) * 3125 / p_var1;
+        int64_t p = (((1048576LL - (int64_t)adc_P) << 31) - p_var2) * 3125 / p_var1;
         p = ((p + ((((int64_t)dig_P9_) * (p >> 13) * (p >> 13)) >> 25) + ((((int64_t)dig_P8_) * p) >> 19)) >> 8) + (((int64_t)dig_P7_) << 4);
         press_mmhg = ((float)p / 256.0f) * 0.00750062f;
         return true;
     }
 };
+
 class CompactWifiBoardLcd : public WifiBoard {
 private:
     Button boot_button_;
-    LcdDisplay* display_ = nullptr;
+    KosmonavtEyeDisplay* display_ = nullptr;
     CircularStrip* led_strip_ = nullptr;
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     SimpleBmp280 bmp280_;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
     adc_cali_handle_t adc_cali_ = nullptr;
+    uint8_t helmet_r_ = 0, helmet_g_ = 150, helmet_b_ = 255;
+    uint8_t helmet_brightness_ = 80;
 
     void InitPeriphPower() {
         gpio_config_t io_conf = {
@@ -180,7 +313,6 @@ private:
         }
         return ((sum_mv / 16.0f) * 2.0f) / 1000.0f;
     }
-
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_SPI_MOSI_PIN;
@@ -218,10 +350,10 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
-                                     DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_ = new KosmonavtEyeDisplay(panel_io, panel,
+                                           DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                           DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+                                           DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
@@ -234,6 +366,14 @@ private:
         boot_button_.OnLongPress([this]() {
             EnterDeepSleep();
         });
+    }
+
+    void ApplyHelmetColor() {
+        if (!led_strip_) return;
+        uint8_t r = (helmet_r_ * helmet_brightness_) / 100;
+        uint8_t g = (helmet_g_ * helmet_brightness_) / 100;
+        uint8_t b = (helmet_b_ * helmet_brightness_) / 100;
+        led_strip_->SetAllColor({r, g, b});
     }
 
     void InitializeTools() {
@@ -259,16 +399,27 @@ private:
                 Property("blue", kPropertyTypeInteger, 0, 255)
             }),
             [this](const PropertyList& properties) -> ReturnValue {
-                uint8_t r = 0, g = 0, b = 0;
                 auto props = properties;
                 for (const auto& p : props) {
-
-                    if (p.name() == "red") r = p.value<int>();
-                    else if (p.name() == "green") g = p.value<int>();
-                    else if (p.name() == "blue") b = p.value<int>();
+                    if (p.name() == "red") helmet_r_ = p.value<int>();
+                    else if (p.name() == "green") helmet_g_ = p.value<int>();
+                    else if (p.name() == "blue") helmet_b_ = p.value<int>();
                 }
+                ApplyHelmetColor();
+                return true;
+            });
 
-                if (led_strip_) led_strip_->SetAllColor({r, g, b});
+        mcp.AddTool("self.helmet_light.set_brightness",
+            "Установить яркость подсветки шлема от 0 до 100 процентов без изменения цвета",
+            PropertyList({
+                Property("brightness", kPropertyTypeInteger, 0, 100)
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                auto props = properties;
+                for (const auto& p : props) {
+                    if (p.name() == "brightness") helmet_brightness_ = p.value<int>();
+                }
+                ApplyHelmetColor();
                 return true;
             });
     }
