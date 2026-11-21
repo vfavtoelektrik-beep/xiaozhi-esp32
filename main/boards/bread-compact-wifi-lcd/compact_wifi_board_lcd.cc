@@ -30,7 +30,7 @@
 // Кастомный дисплей с крупными анимированными белыми глазами на глухом чёрном фоне
 class KosmonavtEyeDisplay : public SpiLcdDisplay {
 private:
-    lv_obj_t* eye_screen_ = nullptr;
+    lv_obj_t* eye_layer_ = nullptr;
     lv_obj_t* left_eye_ = nullptr;
     lv_obj_t* right_eye_ = nullptr;
     lv_obj_t* status_bar_ = nullptr;
@@ -40,9 +40,53 @@ private:
     int target_y_ = 62;
     bool is_blinking_ = false;
 
+    void EnsureEyeLayer() {
+        if (eye_layer_) return;
+        lv_obj_t* scr = lv_scr_act();
+        if (!scr) return;
+
+        eye_layer_ = lv_obj_create(scr);
+        lv_obj_set_size(eye_layer_, 240, 240);
+        lv_obj_set_pos(eye_layer_, 0, 0);
+        lv_obj_set_style_bg_color(eye_layer_, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(eye_layer_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(eye_layer_, 0, 0);
+        lv_obj_set_style_pad_all(eye_layer_, 0, 0);
+        lv_obj_clear_flag(eye_layer_, LV_OBJ_FLAG_SCROLLABLE);
+
+        left_eye_ = lv_obj_create(eye_layer_);
+        lv_obj_set_size(left_eye_, 68, 96);
+        lv_obj_set_pos(left_eye_, 36, 62);
+        lv_obj_set_style_bg_color(left_eye_, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(left_eye_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(left_eye_, 0, 0);
+        lv_obj_set_style_radius(left_eye_, 28, 0);
+        lv_obj_clear_flag(left_eye_, LV_OBJ_FLAG_SCROLLABLE);
+
+        right_eye_ = lv_obj_create(eye_layer_);
+        lv_obj_set_size(right_eye_, 68, 96);
+        lv_obj_set_pos(right_eye_, 136, 62);
+        lv_obj_set_style_bg_color(right_eye_, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(right_eye_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(right_eye_, 0, 0);
+        lv_obj_set_style_radius(right_eye_, 28, 0);
+        lv_obj_clear_flag(right_eye_, LV_OBJ_FLAG_SCROLLABLE);
+
+        status_bar_ = lv_obj_create(eye_layer_);
+        lv_obj_set_size(status_bar_, 80, 8);
+        lv_obj_set_pos(status_bar_, 80, 192);
+        lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 180, 255), 0);
+        lv_obj_set_style_bg_opa(status_bar_, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(status_bar_, 0, 0);
+        lv_obj_set_style_radius(status_bar_, 4, 0);
+
+        blink_timer_ = lv_timer_create(BlinkTimerCb, 3200, this);
+    }
+
     static void BlinkTimerCb(lv_timer_t* timer) {
         auto* self = static_cast<KosmonavtEyeDisplay*>(lv_timer_get_user_data(timer));
         if (!self || !self->left_eye_ || !self->right_eye_) return;
+        lv_obj_move_foreground(self->eye_layer_);
         if (!self->is_blinking_) {
             self->is_blinking_ = true;
             lv_obj_set_height(self->left_eye_, 8);
@@ -61,7 +105,9 @@ private:
     }
 
     void ApplyEyeShape(int h, int r, int y_offset) {
+        EnsureEyeLayer();
         if (!left_eye_ || !right_eye_) return;
+        lv_obj_move_foreground(eye_layer_);
         target_h_ = h;
         target_r_ = r;
         target_y_ = y_offset;
@@ -81,64 +127,31 @@ public:
                         bool mirror_x, bool mirror_y, bool swap_xy)
         : SpiLcdDisplay(io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy) {
         DisplayLockGuard lock(this);
-        eye_screen_ = lv_obj_create(nullptr);
-        lv_obj_set_style_bg_color(eye_screen_, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(eye_screen_, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(eye_screen_, LV_OBJ_FLAG_SCROLLABLE);
-
-        // Левый крупный белый глаз
-        left_eye_ = lv_obj_create(eye_screen_);
-        lv_obj_set_size(left_eye_, 68, 96);
-        lv_obj_set_pos(left_eye_, 36, 62);
-        lv_obj_set_style_bg_color(left_eye_, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(left_eye_, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(left_eye_, 0, 0);
-        lv_obj_set_style_radius(left_eye_, 28, 0);
-        lv_obj_clear_flag(left_eye_, LV_OBJ_FLAG_SCROLLABLE);
-
-        // Правый крупный белый глаз
-        right_eye_ = lv_obj_create(eye_screen_);
-        lv_obj_set_size(right_eye_, 68, 96);
-        lv_obj_set_pos(right_eye_, 136, 62);
-        lv_obj_set_style_bg_color(right_eye_, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(right_eye_, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(right_eye_, 0, 0);
-        lv_obj_set_style_radius(right_eye_, 28, 0);
-        lv_obj_clear_flag(right_eye_, LV_OBJ_FLAG_SCROLLABLE);
-
-        // Тонкая полоска состояния внизу визора (белая/голубая/зелёная)
-        status_bar_ = lv_obj_create(eye_screen_);
-        lv_obj_set_size(status_bar_, 80, 8);
-        lv_obj_set_pos(status_bar_, 80, 192);
-        lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 180, 255), 0);
-        lv_obj_set_style_bg_opa(status_bar_, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(status_bar_, 0, 0);
-        lv_obj_set_style_radius(status_bar_, 4, 0);
-
-        lv_scr_load(eye_screen_);
-        blink_timer_ = lv_timer_create(BlinkTimerCb, 3200, this);
+        EnsureEyeLayer();
     }
 
     virtual bool SetEmotion(const char* emotion) override {
         if (!emotion) return false;
         DisplayLockGuard lock(this);
         if (strcmp(emotion, "happy") == 0 || strcmp(emotion, "laughing") == 0 || strcmp(emotion, "loving") == 0) {
-            ApplyEyeShape(52, 26, 82); // Весёлый прищур
+            ApplyEyeShape(52, 26, 82);
         } else if (strcmp(emotion, "surprised") == 0 || strcmp(emotion, "shocked") == 0) {
-            ApplyEyeShape(114, 34, 52); // Широко раскрытые глаза
+            ApplyEyeShape(114, 34, 52);
         } else if (strcmp(emotion, "sad") == 0 || strcmp(emotion, "crying") == 0 || strcmp(emotion, "sleepy") == 0) {
-            ApplyEyeShape(36, 16, 102); // Грустные / сонные прикрытые глаза
+            ApplyEyeShape(36, 16, 102);
         } else if (strcmp(emotion, "thinking") == 0 || strcmp(emotion, "confused") == 0) {
-            ApplyEyeShape(64, 20, 74); // Задумчивый прищур
+            ApplyEyeShape(64, 20, 74);
         } else {
-            ApplyEyeShape(96, 28, 62); // Обычные крупные открытые глаза
+            ApplyEyeShape(96, 28, 62);
         }
         return true;
     }
 
     virtual void SetStatus(const char* status) override {
-        if (!status || !status_bar_) return;
+        if (!status) return;
         DisplayLockGuard lock(this);
+        EnsureEyeLayer();
+        if (!status_bar_) return;
         if (strstr(status, "Listening") || strstr(status, "Слушаю")) {
             lv_obj_set_style_bg_color(status_bar_, lv_color_make(0, 255, 100), 0);
             ApplyEyeShape(106, 30, 56);
@@ -152,7 +165,8 @@ public:
     }
 
     virtual void SetChatMessage(const char* role, const char* content) override {
-        // Игнорируем мелкий текст субтитров, чтобы визор оставался чистым
+        DisplayLockGuard lock(this);
+        EnsureEyeLayer();
     }
 };
 
