@@ -628,7 +628,7 @@ private:
         });
     }
 
-    void RegisterStripTools(const std::string& prefix, const std::string& title, StripChannel* ch) {
+       void RegisterStripTools(const std::string& prefix, const std::string& title, StripChannel* ch) {
         auto& mcp = McpServer::GetInstance();
 
         mcp.AddTool(prefix + ".set_color",
@@ -639,7 +639,8 @@ private:
                 Property("blue", kPropertyTypeInteger, 0, 255)
             }),
             [ch](const PropertyList& properties) -> ReturnValue {
-                for (const auto& p : properties) {
+                auto props = properties;
+                for (const auto& p : props) {
                     if (p.name() == "red") ch->r = p.value<int>();
                     else if (p.name() == "green") ch->g = p.value<int>();
                     else if (p.name() == "blue") ch->b = p.value<int>();
@@ -655,7 +656,8 @@ private:
                 Property("brightness", kPropertyTypeInteger, 0, 100)
             }),
             [ch](const PropertyList& properties) -> ReturnValue {
-                for (const auto& p : properties) {
+                auto props = properties;
+                for (const auto& p : props) {
                     if (p.name() == "brightness") ch->brightness = p.value<int>();
                 }
                 if (ch->effect == "solid") ch->ApplySolid();
@@ -671,8 +673,9 @@ private:
                 Property("blue", kPropertyTypeInteger, 0, 255)
             }),
             [ch](const PropertyList& properties) -> ReturnValue {
+                auto props = properties;
                 int idx = 1, pr = 0, pg = 0, pb = 0;
-                for (const auto& p : properties) {
+                for (const auto& p : props) {
                     if (p.name() == "index") idx = p.value<int>();
                     else if (p.name() == "red") pr = p.value<int>();
                     else if (p.name() == "green") pg = p.value<int>();
@@ -688,7 +691,8 @@ private:
                 Property("effect", kPropertyTypeString)
             }),
             [ch](const PropertyList& properties) -> ReturnValue {
-                for (const auto& p : properties) {
+                auto props = properties;
+                for (const auto& p : props) {
                     if (p.name() == "effect") ch->effect = p.value<std::string>();
                 }
                 if (ch->effect == "solid") ch->ApplySolid();
