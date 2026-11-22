@@ -26,8 +26,19 @@
 #include <string>
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 
 #define TAG "KosmonavtLcdBoard"
+
+// Отдельный пин и количество диодов для «парящей» подсветки подиума
+#define PODIUM_STRIP_PIN   GPIO_NUM_38
+#define PODIUM_STRIP_COUNT 12
+
+// Заглушка для системного Led, чтобы прошивка сама не перебивала цвета шлема и подиума
+class DummySystemLed : public Led {
+public:
+    virtual void OnStateChanged() override {}
+};
 
 // Кастомный дисплей с крупными живыми глазами (белки, зрачки, блики) и полным засыпанием
 class KosmonavtEyeDisplay : public SpiLcdDisplay {
@@ -53,7 +64,6 @@ private:
 
     void UpdatePupilPositions() {
         if (!left_pupil_ || !right_pupil_) return;
-        // Центрируем зрачок (28x36) внутри глаза (74 x target_h_) со смещением (pupil_dx_, pupil_dy_)
         int pw = 28;
         int ph = (target_h_ < 44) ? (target_h_ - 8) : 36;
         if (ph < 8) ph = 8;
@@ -64,7 +74,6 @@ private:
         int px = (74 - pw) / 2 + pupil_dx_;
         int py = (target_h_ - ph) / 2 + pupil_dy_;
 
-        // Ограничиваем, чтобы зрачок не вылезал за края белка
         if (px < 6) px = 6;
         if (px > 74 - pw - 6) px = 74 - pw - 6;
         if (py < 4) py = 4;
@@ -88,7 +97,6 @@ private:
         lv_obj_set_style_pad_all(eye_layer_, 0, 0);
         lv_obj_clear_flag(eye_layer_, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Левый глаз (белок)
         left_eye_ = lv_obj_create(eye_layer_);
         lv_obj_set_size(left_eye_, 74, 104);
         lv_obj_set_pos(left_eye_, 32, 58);
@@ -99,7 +107,6 @@ private:
         lv_obj_set_style_radius(left_eye_, 32, 0);
         lv_obj_clear_flag(left_eye_, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Правый глаз (белок)
         right_eye_ = lv_obj_create(eye_layer_);
         lv_obj_set_size(right_eye_, 74, 104);
         lv_obj_set_pos(right_eye_, 134, 58);
@@ -110,7 +117,6 @@ private:
         lv_obj_set_style_radius(right_eye_, 32, 0);
         lv_obj_clear_flag(right_eye_, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Левый зрачок
         left_pupil_ = lv_obj_create(left_eye_);
         lv_obj_set_size(left_pupil_, 28, 36);
         lv_obj_set_style_bg_color(left_pupil_, lv_color_black(), 0);
@@ -120,7 +126,6 @@ private:
         lv_obj_set_style_radius(left_pupil_, 14, 0);
         lv_obj_clear_flag(left_pupil_, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Правый зрачок
         right_pupil_ = lv_obj_create(right_eye_);
         lv_obj_set_size(right_pupil_, 28, 36);
         lv_obj_set_style_bg_color(right_pupil_, lv_color_black(), 0);
@@ -130,7 +135,6 @@ private:
         lv_obj_set_style_radius(right_pupil_, 14, 0);
         lv_obj_clear_flag(right_pupil_, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Белые блики в зрачках (оживляют взгляд)
         left_glint_ = lv_obj_create(left_pupil_);
         lv_obj_set_size(left_glint_, 8, 8);
         lv_obj_set_pos(left_glint_, 5, 6);
@@ -149,7 +153,6 @@ private:
 
         UpdatePupilPositions();
 
-        // Полоска статуса снизу
         status_bar_ = lv_obj_create(eye_layer_);
         lv_obj_set_size(status_bar_, 72, 6);
         lv_obj_set_pos(status_bar_, 84, 196);
@@ -191,7 +194,6 @@ private:
     static void LookTimerCb(lv_timer_t* timer) {
         auto* self = static_cast<KosmonavtEyeDisplay*>(lv_timer_get_user_data(timer));
         if (!self || self->is_sleeping_ || self->is_blinking_) return;
-        // Лёгкое живое движение зрачков по сторонам
         static const int offsets[][2] = {{0, 0}, {-10, -4}, {10, -4}, {0, 0}, {-8, 6}, {8, 6}, {0, -8}};
         int idx = rand() % 7;
         self->pupil_dx_ = offsets[idx][0];
@@ -246,8 +248,8 @@ public:
     virtual bool SetEmotion(const char* emotion) override {
         if (!emotion) return false;
         DisplayLockGuard lock(this);
-                if (strcmp(emotion, "sleep") == 0 || strcmp(emotion, "sleepy") == 0) {
-            SetScreenSleep(true);
+        if (strcmp(emotion, "sleep") == 0 || strcmp(emotion, "sleepy") == 0) {
+        SetScreenSleep(true);
             return true;
         }
         SetScreenSleep(false);
@@ -286,7 +288,6 @@ public:
             lv_obj_set_style_bg_color(status_bar_, lv_color_make(255, 180, 0), 0);
             ApplyEyeShape(84, 28, 68, 0, -10);
         } else {
-            // Режим ожидания / тишина (Idle / Standby) — полностью гасим глаза и подсветку!
             SetScreenSleep(true);
         }
     }
@@ -297,8 +298,10 @@ public:
     }
 };
 
+// Датчик BMP280 с авто-восстановлением связи на 50 кГц
 class SimpleBmp280 {
 private:
+    i2c_master_bus_handle_t bus_ = nullptr;
     i2c_master_dev_handle_t dev_handle_ = nullptr;
     bool initialized_ = false;
     uint16_t dig_T1_ = 0, dig_P1_ = 0;
@@ -306,23 +309,33 @@ private:
     int16_t dig_P5_ = 0, dig_P6_ = 0, dig_P7_ = 0, dig_P8_ = 0, dig_P9_ = 0;
 
     bool ReadReg(uint8_t reg, uint8_t* data, size_t len) {
-        return i2c_master_transmit_receive(dev_handle_, &reg, 1, data, len, 100) == ESP_OK;
+        if (!dev_handle_) return false;
+        return i2c_master_transmit_receive(dev_handle_, &reg, 1, data, len, 150) == ESP_OK;
     }
     bool WriteReg(uint8_t reg, uint8_t val) {
+        if (!dev_handle_) return false;
         std::vector<uint8_t> buf = {reg, val};
-        return i2c_master_transmit(dev_handle_, buf.data(), buf.size(), 100) == ESP_OK;
+        return i2c_master_transmit(dev_handle_, buf.data(), buf.size(), 150) == ESP_OK;
     }
 
 public:
     bool Init(i2c_master_bus_handle_t bus) {
+        if (!bus) return false;
+        bus_ = bus;
+        if (dev_handle_) {
+            i2c_master_bus_rm_device(dev_handle_);
+            dev_handle_ = nullptr;
+        }
+        initialized_ = false;
+
         std::vector<uint8_t> addrs = {0x76, 0x77};
         for (uint8_t addr : addrs) {
             i2c_device_config_t dev_cfg = {
                 .dev_addr_length = I2C_ADDR_BIT_LEN_7,
                 .device_address = addr,
-                .scl_speed_hz = 100000,
+                .scl_speed_hz = 50000, // 50 кГц — максимально надёжно на длинных проводах в подиум
             };
-            if (i2c_master_bus_add_device(bus, &dev_cfg, &dev_handle_) == ESP_OK) {
+            if (i2c_master_bus_add_device(bus_, &dev_cfg, &dev_handle_) == ESP_OK) {
                 uint8_t id = 0;
                 if (ReadReg(0xD0, &id, 1) && (id == 0x58 || id == 0x60)) {
                     std::vector<uint8_t> c(24, 0);
@@ -342,6 +355,7 @@ public:
                         WriteReg(0xF4, 0x27);
                         WriteReg(0xF5, 0xA0);
                         initialized_ = true;
+                        ESP_LOGI(TAG, "BMP280 найден по адресу 0x%02X (ID=0x%02X)", addr, id);
                         return true;
                     }
                 }
@@ -353,9 +367,15 @@ public:
     }
 
     bool Read(float& temp_c, float& press_mmhg) {
-        if (!initialized_) return false;
+        if (!initialized_) {
+            if (!Init(bus_)) return false;
+        }
         std::vector<uint8_t> d(6, 0);
-        if (!ReadReg(0xF7, d.data(), 6)) return false;
+        if (!ReadReg(0xF7, d.data(), 6)) {
+            if (!Init(bus_) || !ReadReg(0xF7, d.data(), 6)) {
+                return false;
+            }
+        }
 
         int32_t adc_P = ((uint32_t)d.at(0) << 12) | ((uint32_t)d.at(1) << 4) | (d.at(2) >> 4);
         int32_t adc_T = ((uint32_t)d.at(3) << 12) | ((uint32_t)d.at(4) << 4) | (d.at(5) >> 4);
@@ -378,17 +398,95 @@ public:
     }
 };
 
+// Контроллер независимой адресной ленты (для шлема или подиума) с эффектами и попиксельным управлением
+struct StripChannel {
+    CircularStrip* strip = nullptr;
+    int count = 12;
+    uint8_t r = 0, g = 150, b = 255;
+    uint8_t brightness = 80;
+    std::string effect = "solid";
+    std::vector<StripColor> pixels;
+    uint16_t step = 0;
+
+    void Init(gpio_num_t pin, int led_count, uint8_t def_r, uint8_t def_g, uint8_t def_b) {
+        count = led_count;
+        r = def_r; g = def_g; b = def_b;
+        pixels.assign(count, {0, 0, 0});
+        strip = new CircularStrip(pin, count);
+        ApplySolid();
+    }
+
+    StripColor Scale(uint8_t cr, uint8_t cg, uint8_t cb) const {
+        return {
+            (uint8_t)((cr * brightness) / 100),
+            (uint8_t)((cg * brightness) / 100),
+            (uint8_t)((cb * brightness) / 100)
+        };
+    }
+
+    void ApplySolid() {
+        if (!strip) return;
+        StripColor c = Scale(r, g, b);
+        for (int i = 0; i < count; i++) pixels[i] = c;
+        strip->SetAllColor(c);
+    }
+
+    void SetPixel(int index_1_based, uint8_t pr, uint8_t pg, uint8_t pb) {
+        if (!strip || index_1_based < 1 || index_1_based > count) return;
+        effect = "custom";
+        pixels[index_1_based - 1] = Scale(pr, pg, pb);
+        for (int i = 0; i < count; i++) {
+            strip->SetSingleColor(i, pixels[i]);
+        }
+    }
+
+    static StripColor Wheel(uint8_t pos) {
+        pos = 255 - pos;
+        if (pos < 85) return {(uint8_t)(255 - pos * 3), 0, (uint8_t)(pos * 3)};
+        if (pos < 170) { pos -= 85; return {0, (uint8_t)(pos * 3), (uint8_t)(255 - pos * 3)}; }
+        pos -= 170;
+        return {(uint8_t)(pos * 3), (uint8_t)(255 - pos * 3), 0};
+    }
+
+    void TickEffect() {
+        if (!strip || effect == "solid" || effect == "custom") return;
+        step++;
+        if (effect == "rainbow") {
+            for (int i = 0; i < count; i++) {
+                StripColor w = Wheel((uint8_t)((i * 256 / count + step * 4) & 255));
+                strip->SetSingleColor(i, Scale(w.red, w.green, w.blue));
+            }
+        } else if (effect == "chase") {
+            int head = step % count;
+            for (int i = 0; i < count; i++) {
+                if (i == head) strip->SetSingleColor(i, Scale(r, g, b));
+                else if (i == (head + count - 1) % count) strip->SetSingleColor(i, Scale(r / 4, g / 4, b / 4));
+                else strip->SetSingleColor(i, {0, 0, 0});
+            }
+        } else if (effect == "breath") {
+            float phase = (sinf(step * 0.12f) + 1.0f) * 0.5f;
+            uint8_t br = (uint8_t)(brightness * (0.1f + 0.9f * phase));
+            StripColor c = {
+                (uint8_t)((r * br) / 100),
+                (uint8_t)((g * br) / 100),
+                (uint8_t)((b * br) / 100)
+            };
+            strip->SetAllColor(c);
+        }
+    }
+};
+
 class CompactWifiBoardLcd : public WifiBoard {
 private:
     Button boot_button_;
+    DummySystemLed dummy_led_;
     KosmonavtEyeDisplay* display_ = nullptr;
-    CircularStrip* led_strip_ = nullptr;
+    StripChannel helmet_led_;
+    StripChannel podium_led_;
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     SimpleBmp280 bmp280_;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
     adc_cali_handle_t adc_cali_ = nullptr;
-    uint8_t helmet_r_ = 0, helmet_g_ = 150, helmet_b_ = 255;
-    uint8_t helmet_brightness_ = 80;
 
     void InitPeriphPower() {
         gpio_config_t io_conf = {
@@ -400,28 +498,33 @@ private:
         };
         gpio_config(&io_conf);
         gpio_set_level(PERIPH_POWER_PIN, 1);
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     void EnterDeepSleep() {
         ESP_LOGI(TAG, "Подготовка к глубокому сну...");
-        if (display_) GetBacklight()->SetBrightness(0);
-        if (led_strip_) {
-            led_strip_->SetAllColor({0, 0, 0});
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
 
-        // Ждём, пока отпустите кнопку, иначе плата сразу проснётся (ребутнется)!
+        if (helmet_led_.strip) helmet_led_.strip->SetAllColor({0, 0, 0});
+        if (podium_led_.strip) podium_led_.strip->SetAllColor({0, 0, 0});
+        vTaskDelay(pdMS_TO_TICKS(20));
+
+        // Жёстко гасим подсветку дисплея (GPIO 17) и фиксируем уровень на время сна
+        if (display_) GetBacklight()->SetBrightness(0);
+        gpio_reset_pin(DISPLAY_BACKLIGHT_PIN);
+        gpio_set_direction(DISPLAY_BACKLIGHT_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_level(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT ? 1 : 0);
+        gpio_hold_en(DISPLAY_BACKLIGHT_PIN);
+
         while (gpio_get_level(BOOT_BUTTON_GPIO) == 0) {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
-        vTaskDelay(pdMS_TO_TICKS(120)); // защита от дребезга контактов
+        vTaskDelay(pdMS_TO_TICKS(120));
 
         gpio_reset_pin(NEOPIXEL_STRIP_PIN);
+        gpio_reset_pin(PODIUM_STRIP_PIN);
         gpio_set_level(PERIPH_POWER_PIN, 0);
         gpio_hold_en(PERIPH_POWER_PIN);
 
-        // Включаем RTC-подтяжку вверх для кнопки без внешнего резистора
         rtc_gpio_init(BOOT_BUTTON_GPIO);
         rtc_gpio_set_direction(BOOT_BUTTON_GPIO, RTC_GPIO_MODE_INPUT_ONLY);
         rtc_gpio_pullup_en(BOOT_BUTTON_GPIO);
@@ -525,12 +628,72 @@ private:
         });
     }
 
-    void ApplyHelmetColor() {
-        if (!led_strip_) return;
-        uint8_t r = (helmet_r_ * helmet_brightness_) / 100;
-        uint8_t g = (helmet_g_ * helmet_brightness_) / 100;
-        uint8_t b = (helmet_b_ * helmet_brightness_) / 100;
-        led_strip_->SetAllColor({r, g, b});
+    void RegisterStripTools(const std::string& prefix, const std::string& title, StripChannel* ch) {
+        auto& mcp = McpServer::GetInstance();
+
+        mcp.AddTool(prefix + ".set_color",
+            "Установить сплошной цвет RGB (0-255) для " + title,
+            PropertyList({
+                Property("red", kPropertyTypeInteger, 0, 255),
+                Property("green", kPropertyTypeInteger, 0, 255),
+                Property("blue", kPropertyTypeInteger, 0, 255)
+            }),
+            [ch](const PropertyList& properties) -> ReturnValue {
+                for (const auto& p : properties) {
+                    if (p.name() == "red") ch->r = p.value<int>();
+                    else if (p.name() == "green") ch->g = p.value<int>();
+                    else if (p.name() == "blue") ch->b = p.value<int>();
+                }
+                ch->effect = "solid";
+                ch->ApplySolid();
+                return true;
+            });
+
+        mcp.AddTool(prefix + ".set_brightness",
+            "Установить яркость от 0 до 100 процентов для " + title,
+            PropertyList({
+                Property("brightness", kPropertyTypeInteger, 0, 100)
+            }),
+            [ch](const PropertyList& properties) -> ReturnValue {
+                for (const auto& p : properties) {
+                    if (p.name() == "brightness") ch->brightness = p.value<int>();
+                }
+                if (ch->effect == "solid") ch->ApplySolid();
+                return true;
+            });
+
+        mcp.AddTool(prefix + ".set_pixel",
+            "Установить цвет RGB (0-255) для одного конкретного светодиода (номер от 1 до 12) в " + title,
+            PropertyList({
+                Property("index", kPropertyTypeInteger, 1, 12),
+                Property("red", kPropertyTypeInteger, 0, 255),
+                Property("green", kPropertyTypeInteger, 0, 255),
+                Property("blue", kPropertyTypeInteger, 0, 255)
+            }),
+            [ch](const PropertyList& properties) -> ReturnValue {
+                int idx = 1, pr = 0, pg = 0, pb = 0;
+                for (const auto& p : properties) {
+                    if (p.name() == "index") idx = p.value<int>();
+                    else if (p.name() == "red") pr = p.value<int>();
+                    else if (p.name() == "green") pg = p.value<int>();
+                    else if (p.name() == "blue") pb = p.value<int>();
+                }
+                ch->SetPixel(idx, pr, pg, pb);
+                return true;
+            });
+
+        mcp.AddTool(prefix + ".set_effect",
+            "Включить световой эффект для " + title + ": solid (обычный свет), rainbow (радуга), chase (бегущий огонёк), breath (плавное дыхание)",
+            PropertyList({
+                Property("effect", kPropertyTypeString)
+            }),
+            [ch](const PropertyList& properties) -> ReturnValue {
+                for (const auto& p : properties) {
+                    if (p.name() == "effect") ch->effect = p.value<std::string>();
+                }
+                if (ch->effect == "solid") ch->ApplySolid();
+                return true;
+            });
     }
 
     void InitializeTools() {
@@ -548,37 +711,17 @@ private:
                 return std::string("{\"error\": \"Датчик BMP280 не отвечает\"}");
             });
 
-        mcp.AddTool("self.helmet_light.set_color",
-            "Установить цвет RGB (0-255) неоновой подсветки шлема космонавта",
-            PropertyList({
-                Property("red", kPropertyTypeInteger, 0, 255),
-                Property("green", kPropertyTypeInteger, 0, 255),
-                Property("blue", kPropertyTypeInteger, 0, 255)
-            }),
-            [this](const PropertyList& properties) -> ReturnValue {
-                auto props = properties;
-                for (const auto& p : props) {
-                    if (p.name() == "red") helmet_r_ = p.value<int>();
-                    else if (p.name() == "green") helmet_g_ = p.value<int>();
-                    else if (p.name() == "blue") helmet_b_ = p.value<int>();
-                }
-                ApplyHelmetColor();
-                return true;
-            });
+        RegisterStripTools("self.helmet_light", "подсветки шлема космонавта", &helmet_led_);
+        RegisterStripTools("self.podium_light", "нижней парящей подсветки подиума", &podium_led_);
+    }
 
-        mcp.AddTool("self.helmet_light.set_brightness",
-            "Установить яркость подсветки шлема от 0 до 100 процентов без изменения цвета",
-            PropertyList({
-                Property("brightness", kPropertyTypeInteger, 0, 100)
-            }),
-            [this](const PropertyList& properties) -> ReturnValue {
-                auto props = properties;
-                for (const auto& p : props) {
-                    if (p.name() == "brightness") helmet_brightness_ = p.value<int>();
-                }
-                ApplyHelmetColor();
-                return true;
-            });
+    static void LedEffectsTask(void* arg) {
+        auto* board = static_cast<CompactWifiBoardLcd*>(arg);
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            board->helmet_led_.TickEffect();
+            board->podium_led_.TickEffect();
+        }
     }
 
     static void BatteryMonitorTask(void* arg) {
@@ -586,8 +729,8 @@ private:
         while (true) {
             vTaskDelay(pdMS_TO_TICKS(15000));
             float v = board->ReadBatteryVoltage();
-            if (v > 2.5f && v < 3.25f && board->led_strip_) {
-                board->led_strip_->Blink({255, 0, 0}, 300);
+            if (v > 2.5f && v < 3.25f && board->helmet_led_.strip) {
+                board->helmet_led_.strip->Blink({255, 0, 0}, 300);
             }
             if (v > 2.5f && v <= 3.12f) {
                 board->EnterDeepSleep();
@@ -601,19 +744,26 @@ public:
         gpio_set_pull_mode(BOOT_BUTTON_GPIO, GPIO_PULLUP_ONLY);
 
         gpio_hold_dis(PERIPH_POWER_PIN);
+        gpio_hold_dis(DISPLAY_BACKLIGHT_PIN);
+
         InitPeriphPower();
         InitBatteryAdc();
         InitI2cAndSensors();
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
-        led_strip_ = new CircularStrip(NEOPIXEL_STRIP_PIN, NEOPIXEL_STRIP_COUNT);
+
+        helmet_led_.Init(NEOPIXEL_STRIP_PIN, NEOPIXEL_STRIP_COUNT, 0, 150, 255);
+        podium_led_.Init(PODIUM_STRIP_PIN, PODIUM_STRIP_COUNT, 120, 40, 255);
+
         InitializeTools();
         if (GetBacklight()) GetBacklight()->RestoreBrightness();
+
+        xTaskCreate(LedEffectsTask, "led_fx", 3072, this, 2, nullptr);
         xTaskCreate(BatteryMonitorTask, "bat_mon", 3072, this, 2, nullptr);
     }
 
-    virtual Led* GetLed() override { return led_strip_; }
+    virtual Led* GetLed() override { return &dummy_led_; }
 
     virtual AudioCodec* GetAudioCodec() override {
         static NoAudioCodecSimplex audio_codec(
@@ -641,4 +791,3 @@ public:
 };
 
 DECLARE_BOARD(CompactWifiBoardLcd);
-
